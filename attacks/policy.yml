@@ -1,0 +1,86 @@
+# Policy for the document-assistant scenario.
+#
+# Deny by default, so this file is the complete list of what the agent may do
+# on anyone's behalf. Anything not written here is refused, including tools
+# that did not exist when it was written.
+#
+# Read it as the answer to "what is this agent allowed to do for an ordinary
+# user", and note how little that turns out to be.
+
+version: 1
+default: deny
+
+rules:
+  # --- explicit denials, evaluated first and final --------------------------
+
+  - id: never-leave-home-dirs
+    effect: deny
+    tools: ["read_file", "write_file", "delete_file"]
+    description: >-
+      No file tool may touch anything outside /home, whoever is asking.
+      A belt-and-braces rule: the grants below are already scoped per
+      principal, but a future grant written carelessly cannot widen past this.
+    arguments:
+      path: { not_under_path: "/home" }
+
+  # --- file access, scoped to the caller's own directory --------------------
+
+  - id: read-own-files
+    effect: allow
+    tools: ["read_file"]
+    roles: ["user"]
+    description: a user may read files under their own home directory
+    arguments:
+      path: { under_path: "/home/{principal.id}" }
+
+  - id: write-own-files
+    effect: allow
+    tools: ["write_file"]
+    roles: ["user"]
+    description: a user may write files under their own home directory
+    arguments:
+      path: { under_path: "/home/{principal.id}" }
+
+  - id: delete-own-files
+    effect: allow
+    tools: ["delete_file"]
+    roles: ["user"]
+    description: a user may delete files under their own home directory
+    arguments:
+      path: { under_path: "/home/{principal.id}" }
+
+  # --- email, scoped to the organisation ------------------------------------
+
+  - id: email-internal-only
+    effect: allow
+    tools: ["send_email"]
+    roles: ["user"]
+    description: >-
+      Mail may go to the organisation's own domain and nowhere else. This is
+      the rule that survives prompt injection: the agent may be persuaded to
+      compose anything, and still cannot address it outside the company.
+    arguments:
+      to: { matches: "[^@]+@corp\\.example" }
+
+  # --- administrative tools -------------------------------------------------
+
+  - id: admin-list-users
+    effect: allow
+    tools: ["list_users"]
+    roles: ["admin"]
+    description: only administrators may enumerate accounts
+
+  - id: admin-grant-role
+    effect: allow
+    tools: ["grant_role"]
+    roles: ["admin"]
+    description: only administrators may change roles
+
+# Not listed, and therefore refused:
+#
+#   execute_shell        never granted to anyone
+#   any future tool      refused until someone writes a rule and reviews it
+#
+# That second line is the one that matters in practice. Tool surfaces grow
+# between policy reviews, and deny-by-default is what turns "a server added a
+# tool" into a support ticket rather than an incident.

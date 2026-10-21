@@ -1,0 +1,114 @@
+# Hand-labelled ground truth for detector/mcp_authz_scan.py.
+#
+# Every finding the scanner produced against the corpus below was checked by
+# reading the source, and every known miss is recorded. The numbers in the
+# README are computed from this file, so if you think a label is wrong the
+# thing to argue with is here, with a file and a line.
+#
+# Labelling standard
+# ------------------
+# A finding is a TRUE POSITIVE when the server's own manifest contradicts its
+# own code in a way a client would act on:
+#
+#   - a tool performs a network call or a write and declares no annotations,
+#     so a client has nothing to reason about before auto-approving it
+#   - a tool declares readOnlyHint=true and mutates
+#   - a tool declares destructiveHint=false and destroys rather than adds
+#   - a tool declares openWorldHint=false and reaches the network
+#
+# It is a FALSE POSITIVE when the declaration is defensible on reading. The
+# judgement is about what a reviewer would conclude, not about whether the
+# scanner's pattern matched.
+#
+# Deliberately NOT labelled a defect: a tool taking a caller-supplied path or
+# id with no scoping. Most of this corpus is single-user local servers where
+# that is the entire product. Those appear in the inventory, not the findings.
+
+corpus:
+  - name: modelcontextprotocol/servers (git)
+    commit: 51b6382a3e827aceb6bce430b1208d69b93d95ea
+    path: src/git
+    tools: 12
+  - name: modelcontextprotocol/servers (fetch)
+    commit: 51b6382a3e827aceb6bce430b1208d69b93d95ea
+    path: src/fetch
+    tools: 1
+  - name: modelcontextprotocol/python-sdk
+    commit: 2af9e30
+    path: examples
+    tools: 119
+  - name: PrefectHQ/fastmcp
+    commit: d922769
+    path: examples
+    tools: 157
+
+total_tools: 289
+
+findings:
+  - tool: show_map
+    file: fastmcp/examples/apps/map/map_server.py
+    kind: undeclared-risk
+    verdict: true_positive
+    note: >-
+      Calls httpx2.get() against a geocoding API and declares no annotations.
+      A client has no basis to decide whether this reaches the network.
+      Caught only after import tracking was added: the receiver is `httpx2`,
+      not `httpx`, so a list of known client names missed it.
+
+  - tool: get_test_pdf_from_url
+    file: fastmcp/examples/get_file.py
+    kind: undeclared-risk
+    verdict: true_positive
+    note: >-
+      aiohttp session.get(url) where url is a caller-supplied parameter with a
+      default. Fetches an arbitrary URL on the caller's say-so, declares
+      nothing. SSRF-shaped surface in an example that will be copied.
+
+  - tool: textme
+    file: python-sdk/examples/mcpserver/text_me.py
+    kind: undeclared-risk
+    verdict: true_positive
+    note: >-
+      httpx client.post to api.surgemsg.com. Sends an actual SMS to a
+      configured phone number and declares no annotations, so a client cannot
+      know this has a side effect in the world before approving it.
+
+  - tool: textme
+    file: fastmcp/examples/text_me.py
+    kind: undeclared-risk
+    verdict: true_positive
+    note: the same example carried into FastMCP, same reasoning.
+
+  - tool: "<GitTools.COMMIT.value>"
+    file: mcp-official/src/git/src/mcp_server_git/server.py
+    line: 583
+    kind: destructive-understated
+    verdict: false_positive
+    note: >-
+      Flagged because git_commit() calls unlink() on .git/MERGE_HEAD and
+      friends after a merge commit. That is internal plumbing, not a
+      destructive update to anything the caller owns, so destructive_hint=False
+      is correct and the scanner is wrong. Left unfixed on purpose: narrowing
+      the rule further until this one case disappears would be overfitting to
+      a single example, and the honest number is more useful than a clean one.
+
+known_misses:
+  - tool: play_media
+    file: fastmcp/examples/apps/media_picker/media_picker_server.py
+    note: >-
+      Reaches the network through _play_via_mcp(), which connects to another
+      MCP server using a client library rather than an HTTP module. Network
+      behind a domain-specific abstraction is not modelled.
+
+  - tool: save_media
+    file: fastmcp/examples/apps/media_picker/media_picker_server.py
+    note: same call path as play_media.
+
+# Computed from the labels above.
+accuracy:
+  findings: 5
+  true_positives: 4
+  false_positives: 1
+  known_misses: 2
+  precision: 0.800
+  recall: 0.667

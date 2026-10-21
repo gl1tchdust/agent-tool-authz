@@ -161,6 +161,9 @@ with a dependency on someone else's release schedule.
 
 ## The detector: what is this server's authorization surface?
 
+> The full method, results and the four bugs the real corpus found in this
+> detector are written up in **[RESEARCH.md](RESEARCH.md)**.
+
 A gate needs a policy, and a policy needs to know what the server exposes.
 `detector/mcp_authz_scan.py` reads a Python MCP server and answers three
 questions about every tool:

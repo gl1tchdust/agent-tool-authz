@@ -59,12 +59,22 @@ while :; do
   fi
 
   # Retry: a transient timeout must not be mistaken for the end of the data.
+  # Retry only a FAILED fetch, meaning a dead connection or a malformed body
+  # (pageinfo exit 1). Exit 3 is a successfully fetched page that merely looks
+  # like the end, and it has to reach the confirmation step below rather than
+  # be retried as a failure: the registry's genuine last page carries rows and
+  # no cursor, so treating exit 3 as a failed fetch discards the final page
+  # and gives up three attempts later.
   ok=0
+  verdict=1
   for attempt in 1 2 3; do
-    if curl -s --max-time 45 "$url" -o "$f" \
-       && python "$HERE/pageinfo.py" "$f" >/dev/null 2>&1; then
-      ok=1
-      break
+    if curl -s --max-time 45 "$url" -o "$f"; then
+      python "$HERE/pageinfo.py" "$f" >/dev/null 2>&1
+      verdict=$?
+      if [ "$verdict" -eq 0 ] || [ "$verdict" -eq 3 ]; then
+        ok=1
+        break
+      fi
     fi
     sleep $((attempt * 3))
   done
@@ -73,9 +83,6 @@ while :; do
     rm -f "$f"
     break
   fi
-
-  python "$HERE/pageinfo.py" "$f" >/dev/null 2>&1
-  verdict=$?
 
   # An empty page is NOT accepted as the end of the registry on one answer.
   # The API intermittently returns zero servers and no cursor for a cursor

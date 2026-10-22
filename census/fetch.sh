@@ -38,7 +38,7 @@ for r in rows: print(r['nwo'])
 " | tr -d '\r')
 
 total=${#repos[@]}
-i=0; ok=0; miss=0
+i=0; ok=0; miss=0; err=0
 for nwo in "${repos[@]}"; do
   i=$((i+1))
   slug="${nwo//\//__}"
@@ -49,10 +49,37 @@ for nwo in "${repos[@]}"; do
     ok=$((ok+1)); continue
   fi
 
-  sha=$(gh api "repos/$nwo/commits/HEAD" --jq '.sha' 2>/dev/null)
-  if [ -z "$sha" ]; then
-    printf '%s\tMISS\n' "$nwo" >> "$SHAS.partial"
-    miss=$((miss+1)); continue
+  # Resolve the commit, distinguishing three outcomes that must never be
+  # collapsed into one:
+  #
+  #   sha    the repository is there
+  #   MISS   GitHub says Not Found, so it is genuinely gone or private
+  #   ERROR  we could not tell, usually a secondary rate limit
+  #
+  # The first version of this recorded every failure as MISS. GitHub throttles
+  # rapid sequential requests, so a bulk run reported 367 of 962 repositories
+  # as deleted. Spot-checking six of them found five alive: the "38% of
+  # registry entries are dead" result was entirely an artefact of my own
+  # request rate. An unresolved repository has to stay visibly unresolved,
+  # because a miss silently inflates the denominator of every rate computed
+  # from this corpus.
+  sha=""; verdict="ERROR"
+  for attempt in 1 2 3 4 5; do
+    resp=$(gh api "repos/$nwo/commits/HEAD" --jq '.sha' 2>&1)
+    if [ -n "$resp" ] && [ "${resp:0:1}" != "{" ] && ! printf '%s' "$resp" | grep -qi 'message\|error'; then
+      sha="$resp"; verdict="OK"; break
+    fi
+    if printf '%s' "$resp" | grep -qi 'not found'; then
+      verdict="MISS"; break
+    fi
+    # Anything else (403, 429, abuse detection, transport) is retryable.
+    sleep $((attempt * attempt * 2))
+  done
+
+  if [ "$verdict" != "OK" ]; then
+    printf '%s\t%s\n' "$nwo" "$verdict" >> "$SHAS.partial"
+    if [ "$verdict" = "MISS" ]; then miss=$((miss+1)); else err=$((err+1)); fi
+    continue
   fi
 
   rm -rf "$out"; mkdir -p "$out"
@@ -70,8 +97,13 @@ for nwo in "${repos[@]}"; do
     ok=$((ok+1))
   fi
 
-  [ $((i % 25)) -eq 0 ] && echo "  $i/$total  ok=$ok miss=$miss" >&2
+  # A small pause keeps the request rate under GitHub's secondary limit,
+  # which is cheaper than retrying past it.
+  sleep 0.2
+
+  [ $((i % 25)) -eq 0 ] && echo "  $i/$total  ok=$ok miss=$miss err=$err" >&2
 done
 
 mv "$SHAS.partial" "$SHAS"
-echo "examined $ok, unreachable $miss, of $total candidates" >&2
+echo "examined $ok, gone $miss, unresolved $err, of $total candidates" >&2
+[ "$err" -gt 0 ] && echo "WARNING: $err repositories unresolved; rerun to retry them" >&2

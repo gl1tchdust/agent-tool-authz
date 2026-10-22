@@ -26,17 +26,25 @@ mkdir -p "$PAGES"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Resume from the last page already on disk rather than refetching it all.
-page=$(ls "$PAGES"/p*.json 2>/dev/null | wc -l)
+# Resume from the newest page that actually carries a cursor, discarding any
+# trailing empty ones. A sweep that stopped on a spurious empty page leaves it
+# on disk; resuming from that page's (absent) cursor would conclude the
+# harvest was finished and exit 0 again, which is how the truncated sweep
+# stayed truncated.
 cursor=""
-if [ "$page" -gt 0 ]; then
-  last=$(ls "$PAGES"/p*.json | tail -1)
-  cursor=$(python "$HERE/pageinfo.py" "$last" | cut -f2)
-  echo "resuming after page $page, cursor ${cursor:-<none>}" >&2
-  if [ -z "$cursor" ]; then
-    echo "last page carries no cursor: harvest already complete" >&2
-    exit 0
+page=0
+while :; do
+  last=$(ls "$PAGES"/p*.json 2>/dev/null | tail -1)
+  [ -n "$last" ] || break
+  cursor=$(python "$HERE/pageinfo.py" "$last" | cut -f2 | tr -d '\r')
+  if [ -n "$cursor" ]; then
+    page=$(ls "$PAGES"/p*.json | wc -l)
+    echo "resuming after page $page, cursor $cursor" >&2
+    break
   fi
-fi
+  echo "discarding trailing page with no cursor: $(basename "$last")" >&2
+  rm -f "$last"
+done
 
 total=0
 while :; do
@@ -66,6 +74,37 @@ while :; do
     break
   fi
 
+  python "$HERE/pageinfo.py" "$f" >/dev/null 2>&1
+  verdict=$?
+
+  # An empty page is NOT accepted as the end of the registry on one answer.
+  # The API intermittently returns zero servers and no cursor for a cursor
+  # that works perfectly on the next attempt; believing it once truncated a
+  # sweep to a fifth of the data and exited 0. Ask again, several times, and
+  # only believe it if the answer keeps coming back empty.
+  if [ "$verdict" -eq 3 ]; then
+    confirmed=1
+    for confirm in 1 2 3 4; do
+      sleep $((confirm * 2))
+      if curl -s --max-time 45 "$url" -o "$f.recheck" \
+         && python "$HERE/pageinfo.py" "$f.recheck" >/dev/null 2>&1; then
+        # Non-empty on a retry: the empty answer was a glitch. Take this one.
+        mv "$f.recheck" "$f"
+        confirmed=0
+        echo "  page $page came back empty, retry $confirm returned data" >&2
+        break
+      fi
+      rm -f "$f.recheck"
+    done
+    if [ "$confirmed" -eq 1 ]; then
+      info=$(python "$HERE/pageinfo.py" "$f")
+      n=$(printf '%s' "$info" | cut -f1 | tr -d '\r')
+      total=$((total + n))
+      echo "end of registry confirmed at page $page after 4 rechecks" >&2
+      break
+    fi
+  fi
+
   info=$(python "$HERE/pageinfo.py" "$f")
   n=$(printf '%s' "$info" | cut -f1 | tr -d '\r')
   cursor=$(printf '%s' "$info" | cut -f2 | tr -d '\r')
@@ -74,7 +113,7 @@ while :; do
   [ $((page % 20)) -eq 0 ] && echo "  page $page  (+$total this run)" >&2
 
   if [ -z "$cursor" ] || [ "$n" -eq 0 ]; then
-    echo "reached the end of the registry" >&2
+    echo "end of registry at page $page" >&2
     break
   fi
   if [ "$page" -ge "$MAX_PAGES" ]; then

@@ -63,6 +63,43 @@ def test_pageinfo_reports_count_and_cursor(tmp_path: pathlib.Path) -> None:
     assert out.stdout.strip().split("\t") == ["1", "a/b:1.0.0"]
 
 
+def test_pageinfo_flags_an_empty_page_as_suspicious_not_final(tmp_path: pathlib.Path) -> None:
+    """Regression: one empty page truncated a sweep to a fifth of the registry.
+
+    The API answered a valid cursor with zero servers and no nextCursor. That
+    is shaped exactly like the real end of the data, so the harvest stopped at
+    `com.m*` and exited 0. Retrying the identical cursor returned 100 servers
+    on every attempt.
+
+    Exit 3 means "do not believe this without asking again".
+    """
+    p = tmp_path / "p0232.json"
+    p.write_text(json.dumps(_page([], None)), encoding="utf-8")
+    out = _run("pageinfo.py", str(p))
+    assert out.returncode == 3, f"empty page must not report success: {out.stdout}"
+    assert out.stdout.rstrip("\r\n").split("\t") == ["0", ""]
+
+
+def test_pageinfo_flags_servers_without_a_cursor_as_suspicious(tmp_path: pathlib.Path) -> None:
+    """A page with rows but no cursor is also not self-evidently the end."""
+    p = tmp_path / "p0001.json"
+    p.write_text(json.dumps(_page([_record("a/b", "https://github.com/a/b")], None)),
+                 encoding="utf-8")
+    out = _run("pageinfo.py", str(p))
+    assert out.returncode == 3
+    assert out.stdout.rstrip("\r\n").split("\t") == ["1", ""]
+
+
+def test_pageinfo_rejects_a_page_with_no_servers_array(tmp_path: pathlib.Path) -> None:
+    """Distinguished from an empty page: this is malformed, so retry the fetch
+    rather than start confirming the end of the registry."""
+    p = tmp_path / "p0001.json"
+    p.write_text(json.dumps({"metadata": {"nextCursor": "x"}}), encoding="utf-8")
+    out = _run("pageinfo.py", str(p))
+    assert out.returncode == 1
+    assert out.stdout.startswith("ERR\t")
+
+
 def test_pageinfo_reads_non_ascii_page(tmp_path: pathlib.Path) -> None:
     """Regression: a non-ASCII description used to kill the harvest on Windows.
 

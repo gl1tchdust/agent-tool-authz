@@ -221,6 +221,33 @@ scanner is wrong.
 it disappears would be fitting to one example, and a published 0.800 that
 anyone can re-derive is worth more than a 1.000 that was tuned into existence.
 
+### Measured at scale
+
+Four codebases is not a population, so [`census/`](census/) runs the same
+detector over the whole official MCP registry: 28,028 records, 3,310
+repositories, **3,786 tools**.
+
+| | |
+|---|---|
+| Repositories examined | 2,699 |
+| With statically detectable tools | 209 |
+| Tools | 3,786 |
+| **Declaring any annotation** | **39.2%** |
+
+That rate is a census and needs no human judgement, only a parse. It also
+corrected the number this project first published: measured on SDK and FastMCP
+examples the rate looked like 8.7%, and I argued that was an upper bound
+because reference code is better maintained. It was a floor. Examples strip
+annotations out to stay readable, so they are among the least annotated code
+in the ecosystem.
+
+Precision on the census is **estimated** from a seeded random sample of 12
+findings read by hand, at 0.833 with a wide interval, and deliberately not
+inherited from the 0.800 above. The breakdown matters more than the figure:
+`undeclared-risk` scored 10 of 10 while both high-severity kinds were wrong in
+every case examined. [`RESEARCH.md`](RESEARCH.md) explains why the cheap
+structural check holds and the interesting semantic ones do not.
+
 ### What it refuses to claim
 
 Not that a server is vulnerable. Most MCP servers are single-user local tools

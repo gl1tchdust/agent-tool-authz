@@ -288,10 +288,28 @@ def _is_tool_decorator(dec: ast.AST) -> ast.Call | None:
 
     Bare `@server.tool` without parentheses is also matched, since the SDK
     permits it and a tool is still a tool.
+
+    `call_tool` is deliberately NOT matched. On a low-level `Server`,
+    `@server.call_tool()` registers the single dispatcher for every tool the
+    server exposes, so it is not a tool definition. Matching it invented one
+    phantom tool per server, named after the dispatcher, taking `(name,
+    arguments)` and carrying the aggregated behaviour of everything the
+    dispatcher could reach.
+
+    Across the registry census that was 65 of the 285 tools reported for the
+    largest repository alone, and 92 files used the pattern. Because nobody
+    annotates a dispatcher, every phantom landed in the unannotated column and
+    pushed the measured annotation rate down.
+
+    The cost of excluding it is a real blind spot rather than a wrong answer:
+    a server built on the low-level API returns its tools as data from
+    `list_tools()`, so this scanner cannot see them at all and the repository
+    reports zero tools. That is the honest result for a static reader, and it
+    is recorded as a limitation rather than papered over.
     """
     call = dec if isinstance(dec, ast.Call) else None
     target = call.func if call else dec
-    if isinstance(target, ast.Attribute) and target.attr in ("tool", "call_tool"):
+    if isinstance(target, ast.Attribute) and target.attr == "tool":
         return call or ast.Call(func=target, args=[], keywords=[])
     return None
 

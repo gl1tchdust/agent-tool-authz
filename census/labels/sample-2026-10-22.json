@@ -1,0 +1,158 @@
+{
+ "seed": 20261022,
+ "drawn_from": "results2.json",
+ "sample_size": 12,
+ "true_positives": 10,
+ "false_positives": 2,
+ "precision": 0.833,
+ "wilson_95": [
+  0.552,
+  0.953
+ ],
+ "findings": [
+  {
+   "repo": "parsee-ru/MCP",
+   "sha": "1ac19dafd572674fa350b442add9d0a03172413a",
+   "tool": "parsee_add_to_group",
+   "kind": "undeclared-risk",
+   "severity": "LOW",
+   "file": "MCP-1ac19dafd572674fa350b442add9d0a03172413a/server.py",
+   "line": 211,
+   "detail": "performs writes, subprocess or network calls and declares no annotations, so a client has nothing to reason about.",
+   "verdict": "true_positive",
+   "note": "Bare @mcp.tool. _relay_call adds items to a remote group: a network mutation, declared nothing."
+  },
+  {
+   "repo": "MarsHeer/agentdomain-mcp",
+   "sha": "89ea3d903e8ac669e2044cc56655bfc55f4e6008",
+   "tool": "register",
+   "kind": "undeclared-risk",
+   "severity": "LOW",
+   "file": "agentdomain-mcp-89ea3d903e8ac669e2044cc56655bfc55f4e6008/agentdomain_mcp/server.py",
+   "line": 189,
+   "detail": "performs writes, subprocess or network calls and declares no annotations, so a client has nothing to reason about.",
+   "verdict": "true_positive",
+   "note": "Creates an account from email/password/billing and persists an API key to disk. Declares nothing."
+  },
+  {
+   "repo": "horustechltd/horus-flow-mcp",
+   "sha": "771bc08c3a13eeb69ae479f61de428702a5f36a9",
+   "tool": "get_macro_blocks",
+   "kind": "undeclared-risk",
+   "severity": "LOW",
+   "file": "horus-flow-mcp-771bc08c3a13eeb69ae479f61de428702a5f36a9/horus_mcp_public.py",
+   "line": 222,
+   "detail": "performs writes, subprocess or network calls and declares no annotations, so a client has nothing to reason about.",
+   "verdict": "true_positive",
+   "note": "await _fetch('/v1/flow/...') reaches the network, declares nothing."
+  },
+  {
+   "repo": "Aigen-Protocol/aigen-protocol",
+   "sha": "01ea3f33e423b08442d34bb165c9d5a072bbf3b5",
+   "tool": "aigen_rewards",
+   "kind": "undeclared-risk",
+   "severity": "LOW",
+   "file": "aigen-protocol-01ea3f33e423b08442d34bb165c9d5a072bbf3b5/mcp_server.py",
+   "line": 403,
+   "detail": "performs writes, subprocess or network calls and declares no annotations, so a client has nothing to reason about.",
+   "verdict": "true_positive",
+   "note": "requests.get(API_BASE + '/stats') reaches the network, declares nothing."
+  },
+  {
+   "repo": "jyharju-code/verifi",
+   "sha": "648aa30c7313b83ea3b7297f89f66fbc63f996f0",
+   "tool": "verifi_info",
+   "kind": "undeclared-risk",
+   "severity": "LOW",
+   "file": "verifi-648aa30c7313b83ea3b7297f89f66fbc63f996f0/core/mcp/server.py",
+   "line": 291,
+   "detail": "performs writes, subprocess or network calls and declares no annotations, so a client has nothing to reason about.",
+   "verdict": "true_positive",
+   "note": "_current_terms() fetches live price terms over httpx, declares nothing."
+  },
+  {
+   "repo": "joinlayer/agent-toolkit",
+   "sha": "36add21c57cab279e4f3cb25b9a84ca052f22e25",
+   "tool": "diagnose_run_failure",
+   "kind": "closed-world-violation",
+   "severity": "MEDIUM",
+   "file": "agent-toolkit-36add21c57cab279e4f3cb25b9a84ca052f22e25/mcp-gateway/joinlayer_mcp/server.py",
+   "line": 509,
+   "detail": "declares openWorldHint=false but the handler makes network calls (api.request).",
+   "verdict": "false_positive",
+   "note": "declares READ_ONLY with open_world_hint=False and calls its own fixed gateway API. The author defines five constants and separates READ_ONLY from READ_EXTERNAL/WRITE_EXTERNAL, so the closed-world choice is deliberate. Per the spec a single known service is a closed domain; the rule 'any network call implies open world' is too strict. Debatable, counted against the detector."
+  },
+  {
+   "repo": "jukkablomberg/coinbucha-mcp",
+   "sha": "347700ea514f9428cd1bbbb5546d8710da5be222",
+   "tool": "get_treasury_holdings",
+   "kind": "undeclared-risk",
+   "severity": "LOW",
+   "file": "coinbucha-mcp-347700ea514f9428cd1bbbb5546d8710da5be222/server.py",
+   "line": 149,
+   "detail": "performs writes, subprocess or network calls and declares no annotations, so a client has nothing to reason about.",
+   "verdict": "true_positive",
+   "note": "_load() looks like a file read but is urllib.request.urlopen against coinbucha.com. The interprocedural follow was right and my first reading was wrong."
+  },
+  {
+   "repo": "1102tools-dev/federal-contracting-mcps",
+   "sha": "e4c82881581277c6baf9208a18a66aad542c7d9d",
+   "tool": "get_rfo_guidance",
+   "kind": "readonly-violation",
+   "severity": "HIGH",
+   "file": "federal-contracting-mcps-e4c82881581277c6baf9208a18a66aad542c7d9d/servers/acquisition-gov-mcp/src/acquisition_gov_mcp/server.py",
+   "line": 538,
+   "detail": "declares readOnlyHint=true but the handler calls asyncio.create_subprocess_exec. Clients use this annotation to skip confirmation prompts.",
+   "verdict": "false_positive",
+   "note": "declares readOnlyHint=true; the subprocesses are curl with --proto =https --max-redirs 0 and a _html_worker that isolates CPU-heavy parsing from the event loop. Nothing in the caller's environment is modified. The detector conflates spawning a subprocess with mutating state, and penalises defensive engineering."
+  },
+  {
+   "repo": "zencodeinc/hydracept-public",
+   "sha": "f9876c15b4bbc5f9491ac43974284bb182d5f4f5",
+   "tool": "hydracept_download_artifact",
+   "kind": "undeclared-risk",
+   "severity": "LOW",
+   "file": "hydracept-public-f9876c15b4bbc5f9491ac43974284bb182d5f4f5/clients/python/hydracept/mcp/server.py",
+   "line": 900,
+   "detail": "performs writes, subprocess or network calls and declares no annotations, so a client has nothing to reason about.",
+   "verdict": "true_positive",
+   "note": "Network fetch plus a write to a caller-supplied output_path/out/outputPath. Declares nothing."
+  },
+  {
+   "repo": "ForeverTools/kiprio-mcp",
+   "sha": "eebe9b1fa6e28665e3d7166b2a308973f468c37d",
+   "tool": "summarize_text",
+   "kind": "undeclared-risk",
+   "severity": "LOW",
+   "file": "kiprio-mcp-eebe9b1fa6e28665e3d7166b2a308973f468c37d/kiprio_mcp.py",
+   "line": 456,
+   "detail": "performs writes, subprocess or network calls and declares no annotations, so a client has nothing to reason about.",
+   "verdict": "true_positive",
+   "note": "_post('/summarize', ...) reaches the network, declares nothing."
+  },
+  {
+   "repo": "akilat-spec/leave-manager-mcp",
+   "sha": "aeafd76bd4a795bee64acb0a284c7a0071d85e5f",
+   "tool": "apply_leave_ai",
+   "kind": "undeclared-risk",
+   "severity": "LOW",
+   "file": "leave-manager-mcp-aeafd76bd4a795bee64acb0a284c7a0071d85e5f/main.py",
+   "line": 305,
+   "detail": "performs writes, subprocess or network calls and declares no annotations, so a client has nothing to reason about.",
+   "verdict": "true_positive",
+   "note": "fetch_employees_ai opens a MySQL connection and selects. Reaches out, declares nothing. The generic detail line does not say which of writes/exec/network fired, which is a reporting weakness rather than a wrong verdict."
+  },
+  {
+   "repo": "jenniferjiang0511/MIT-AI-studio-HW3",
+   "sha": "ed2e1d4d6acd28e1ffd8e0dec0df515a8a96f6d4",
+   "tool": "get_alerts",
+   "kind": "undeclared-risk",
+   "severity": "LOW",
+   "file": "MIT-AI-studio-HW3-ed2e1d4d6acd28e1ffd8e0dec0df515a8a96f6d4/weather.py",
+   "line": 42,
+   "detail": "performs writes, subprocess or network calls and declares no annotations, so a client has nothing to reason about.",
+   "verdict": "true_positive",
+   "note": "make_nws_request() reaches weather.gov, declares nothing. Student homework, in the official registry."
+  }
+ ]
+}

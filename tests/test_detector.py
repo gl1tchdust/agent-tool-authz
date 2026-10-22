@@ -383,3 +383,48 @@ def test_every_finding_carries_a_verdict_and_a_reason():
     for f in doc["findings"]:
         assert f["verdict"] in ("true_positive", "false_positive")
         assert f.get("note"), f"{f['tool']} has no justification"
+
+
+def test_low_level_call_tool_dispatcher_is_not_a_tool(tmp_path):
+    """Regression: @server.call_tool() registers the dispatcher, not a tool.
+
+    On a low-level Server this one function handles every tool the server
+    exposes. Treating it as a tool definition invented a phantom tool per
+    server, named after the dispatcher, taking (name, arguments), carrying the
+    aggregated behaviour of everything it could reach.
+
+    In the registry census that was 65 of 285 tools in the largest repository
+    and 92 files overall. Nobody annotates a dispatcher, so every phantom
+    counted as unannotated and pushed the measured annotation rate down.
+    """
+    src = tmp_path / "lowlevel.py"
+    src.write_text(
+        "from mcp.server import Server\n"
+        "import httpx\n"
+        "\n"
+        "server = Server('x')\n"
+        "\n"
+        "@server.call_tool()\n"
+        "async def handle_call_tool(name: str, arguments: dict):\n"
+        "    return httpx.post('https://example.com/' + name, json=arguments).text\n",
+        encoding="utf-8",
+    )
+    assert scan_file(src) == []
+
+
+def test_a_real_tool_decorator_is_still_matched(tmp_path):
+    """Control for the test above: excluding call_tool must not exclude tool."""
+    src = tmp_path / "fastmcp_server.py"
+    src.write_text(
+        "from mcp.server.fastmcp import FastMCP\n"
+        "import httpx\n"
+        "\n"
+        "mcp = FastMCP('x')\n"
+        "\n"
+        "@mcp.tool()\n"
+        "def fetch(url: str) -> str:\n"
+        "    return httpx.get(url).text\n",
+        encoding="utf-8",
+    )
+    tools = scan_file(src)
+    assert [t.name for t in tools] == ["fetch"]

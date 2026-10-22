@@ -29,3 +29,6 @@ Thumbs.db
 .hypothesis/
 .corpus/
 .scratch/
+
+# Fetched registry census: third-party source, pinned at run time, never vendored.
+.census/

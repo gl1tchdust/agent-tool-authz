@@ -248,6 +248,33 @@ inherited from the 0.800 above. The breakdown matters more than the figure:
 every case examined. [`RESEARCH.md`](RESEARCH.md) explains why the cheap
 structural check holds and the interesting semantic ones do not.
 
+### TypeScript
+
+Most MCP servers are not Python. [`detector/typescript.py`](detector/typescript.py)
+reads annotations out of TypeScript and JavaScript with tree-sitter:
+
+```bash
+pip install "tree-sitter>=0.23,<0.25" tree-sitter-typescript==0.23.2
+python -m detector.typescript path/to/server/src
+```
+
+Against the official TypeScript servers it finds **49 tools, 49 annotated**.
+Recall is asserted in CI against an independent count of `.registerTool(` call
+sites, because a parser that quietly skipped half the registrations would
+report a confident rate over the half it read.
+
+That 1.000 against 8.7% on the Python reference corpus is not a language
+difference. The Python corpus is SDK and FastMCP *examples*, which strip
+annotations to stay readable. These are working servers.
+
+**Declarations only.** It does not analyse behaviour, so it reports no
+contradictions. Of the four finding kinds, the structural one scored 10 of 10
+and the two interesting ones scored 0 of 4, so porting the comparison would
+have doubled the wrong answers along with the coverage.
+
+Not in the 39.2% yet either: `census/fetch.sh` extracts only `*.py`, so there
+is no TypeScript on disk to count. A data gap, not a capability gap.
+
 ### What it refuses to claim
 
 Not that a server is vulnerable. Most MCP servers are single-user local tools

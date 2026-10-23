@@ -428,10 +428,21 @@ folded into the miss count quietly biases every rate taken from the corpus.
 
 ## 7. Limits
 
-- **Python only.** A GitHub search for `mcp-server language:typescript`
-  returned 48,619 repositories on 2026-10-22, all out of scope. `ast` has no
-  equivalent there. That count drifts daily and depends on the query, so take
-  it as an order of magnitude rather than a measurement.
+- **The census is Python only; TypeScript reads declarations but is not
+  counted yet.** `detector/typescript.py` extracts annotations from TypeScript
+  and JavaScript with tree-sitter, and against the official TypeScript servers
+  finds 49 tools, all 49 annotated. It is not in the 39.2% because the corpus
+  fetch extracts only `*.py`, so there is no TypeScript on disk to count. That
+  is a data gap, not a capability gap, and closing it is a re-fetch.
+  A GitHub search for `mcp-server language:typescript` returned 48,619
+  repositories on 2026-10-22, which drifts daily and depends on the query, so
+  read it as an order of magnitude rather than a measurement.
+- **Behaviour analysis is Python only.** The TypeScript reader does
+  declarations and nothing else, so no contradiction is reported for a
+  TypeScript server. That is deliberate: of the four finding kinds, the one
+  that works scored 10 of 10 and the two interesting ones scored 0 of 4, so
+  porting the comparison would have doubled the wrong answers along with the
+  coverage.
 - **Decorator-defined tools only.** Servers built on the low-level `Server`
   API return their tools as data from `list_tools()`, which a static reader
   cannot enumerate. 92 files in the registry use that pattern and report zero

@@ -1,3 +1,9 @@
 # Only for `scripts/injection_demo.py --live`. The benchmark and the test
 # suite need no model and no API key.
 anthropic>=0.40
+
+# Only for `detector/typescript.py`, which reads MCP annotations out of
+# TypeScript and JavaScript servers. The Python detector, the census and the
+# test suite all run without it; the TypeScript tests skip when it is absent.
+tree-sitter>=0.23,<0.25
+tree-sitter-typescript==0.23.2

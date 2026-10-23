@@ -23,6 +23,10 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
       - run: pip install --quiet -r requirements.txt
+      # tree-sitter is optional for using this repository and required for
+      # testing it. Without it the TypeScript tests skip, and a skipped test
+      # is not a passing test.
+      - run: pip install --quiet "tree-sitter>=0.23,<0.25" tree-sitter-typescript==0.23.2
       - run: python -m pytest tests/ -q
 
   # ---------------------------------------------------------------------------
@@ -110,6 +114,15 @@ jobs:
 
       - name: Score against the labels
         run: python -m detector.measure --strict | tee detector.txt
+
+      # The corpus is on disk here and nowhere else, so this is the only job
+      # where the TypeScript test can assert against real published servers
+      # instead of skipping.
+      - name: TypeScript annotations against the real corpus
+        run: |
+          pip install --quiet "tree-sitter>=0.23,<0.25" tree-sitter-typescript==0.23.2
+          python -m pytest tests/test_typescript.py -q
+          python -m detector.typescript .corpus/mcp-servers/src | tail -4 | tee typescript.txt
 
       - name: Summary
         if: always()

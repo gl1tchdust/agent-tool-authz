@@ -16,9 +16,12 @@
 set -uo pipefail
 
 DEST="${DEST:-.census}"
-CAND="$DEST/candidates.json"
-SRC="$DEST/src"
-SHAS="$DEST/shas.tsv"
+# Overridable so a change to this script can be tried against one repository
+# instead of 3310. An earlier version hardcoded CAND, so an attempt to test a
+# fix on three repositories silently ran the full fetch for hours.
+CAND="${CAND:-$DEST/candidates.json}"
+SRC="${SRC:-$DEST/src}"
+SHAS="${SHAS:-$DEST/shas.tsv}"
 LIMIT="${1:-0}"
 
 [ -f "$CAND" ] || { echo "no $CAND, run census/select.py first" >&2; exit 2; }
@@ -96,22 +99,40 @@ for nwo in "${repos[@]}"; do
     continue
   fi
 
-  rm -rf "$out"; mkdir -p "$out"
-  if curl -sL --max-time 120 "https://codeload.github.com/$nwo/tar.gz/$sha" \
-      | tar -xz -C "$out" --wildcards \
-           --exclude='*/node_modules/*' --exclude='*/dist/*' --exclude='*/build/*' \
-           '*.py' '*.ts' '*.tsx' '*.mjs' '*.js' 2>/dev/null; then
-    printf '%s' "$sha" > "$out/.sha"
-    printf '%s\t%s\n' "$nwo" "$sha" >> "$SHAS.partial"
-    ok=$((ok+1))
-  else
-    # No .py in the tarball is the common case here, not an error: most
-    # registry servers are TypeScript. Record the SHA so the scan still counts
-    # the repository as examined with zero Python tools.
-    printf '%s' "$sha" > "$out/.sha"
-    printf '%s\t%s\n' "$nwo" "$sha" >> "$SHAS.partial"
-    ok=$((ok+1))
+  # Download to a file before extracting, so a failed download is
+  # distinguishable from an archive that simply contains none of the
+  # extensions we asked for.
+  #
+  # Piping curl straight into tar cannot tell those apart, and the first
+  # version of this did not try. A 23 MB tarball takes some 40 seconds, so
+  # under load `--max-time 120` killed downloads mid-stream; tar extracted the
+  # prefix it had received, the script wrote the .sha and counted the
+  # repository as examined. federal-contracting-mcps was stored with 7 Python
+  # files when the archive holds 314, and the census read that as a repository
+  # with no tools rather than as a broken fetch. A truncated download has to be
+  # an ERROR, because recording it as data is how a corpus quietly shrinks.
+  tgz="$out.tgz"
+  rm -rf "$out" "$tgz"
+  if ! curl -sL --max-time 600 --retry 2 --retry-delay 3 \
+       -o "$tgz" "https://codeload.github.com/$nwo/tar.gz/$sha"; then
+    rm -f "$tgz"
+    printf '%s\tERROR\n' "$nwo" >> "$SHAS.partial"
+    err=$((err+1)); continue
   fi
+
+  mkdir -p "$out"
+  # GNU tar exits non-zero when a pattern matches nothing in the archive, which
+  # is the normal case for a repository that is Python-only or TypeScript-only.
+  # That is not a failure, so its status is deliberately ignored here; the
+  # download above is the step whose failure matters.
+  tar -xzf "$tgz" -C "$out" --wildcards \
+      --exclude='*/node_modules/*' --exclude='*/dist/*' --exclude='*/build/*' \
+      '*.py' '*.ts' '*.tsx' '*.mjs' '*.js' 2>/dev/null || true
+  rm -f "$tgz"
+
+  printf '%s' "$sha" > "$out/.sha"
+  printf '%s\t%s\n' "$nwo" "$sha" >> "$SHAS.partial"
+  ok=$((ok+1))
 
   # A small pause keeps the request rate under GitHub's secondary limit,
   # which is cheaper than retrying past it.

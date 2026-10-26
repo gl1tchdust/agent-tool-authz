@@ -124,9 +124,69 @@ def collect(src: pathlib.Path, shas: dict[str, str]) -> dict:
     }
 
 
+def collect_typescript(src: pathlib.Path, shas: dict[str, str]) -> dict:
+    """The same census over TypeScript and JavaScript servers.
+
+    Declarations only. `detector/typescript.py` reads what a tool claims and
+    does not analyse what its handler does, so there are no findings here and
+    the `findings` key stays empty rather than absent, to keep one shape for
+    both languages.
+    """
+    from detector import typescript as ts
+
+    repos = sorted(p for p in src.iterdir() if p.is_dir())
+    examined = with_source = with_tools = 0
+    total_tools = annotated_tools = 0
+    hint_counts: collections.Counter[str] = collections.Counter()
+    per_repo: list[dict] = []
+
+    for repo in repos:
+        examined += 1
+        nwo = repo.name.replace("__", "/", 1)
+        sources = [p for p in repo.rglob("*")
+                   if p.suffix in (".ts", ".tsx", ".js", ".mjs")
+                   and not p.name.endswith(".d.ts")]
+        if not sources:
+            per_repo.append({"repo": nwo, "sha": shas.get(nwo), "py_files": 0,
+                             "tools": 0, "annotated": 0, "findings": 0})
+            continue
+        with_source += 1
+
+        tools = ts.scan_tree(repo)
+        if tools:
+            with_tools += 1
+        annotated_here = 0
+        for tool in tools:
+            total_tools += 1
+            if tool.declared:
+                annotated_tools += 1
+                annotated_here += 1
+                for hint in tool.declared:
+                    hint_counts[hint] += 1
+
+        per_repo.append({"repo": nwo, "sha": shas.get(nwo),
+                         "py_files": len(sources), "tools": len(tools),
+                         "annotated": annotated_here, "findings": 0})
+
+    rate = (annotated_tools / total_tools) if total_tools else 0.0
+    return {
+        "population": {"examined": examined, "with_python": with_source,
+                       "with_tools": with_tools},
+        "census": {"tools": total_tools, "annotated": annotated_tools,
+                   "annotation_rate": round(rate, 4),
+                   "by_field": dict(hint_counts)},
+        "findings": [],
+        "by_kind": {},
+        "repos": per_repo,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--census", type=pathlib.Path, default=pathlib.Path(".census"))
+    ap.add_argument("--typescript", action="store_true",
+                    help="census TypeScript and JavaScript declarations instead "
+                         "of Python. Needs tree-sitter, see requirements-optional.txt")
     ap.add_argument("--json-out", type=pathlib.Path)
     ap.add_argument("--sample", type=int, default=0,
                     help="draw N findings at random for hand-labelling")
@@ -139,7 +199,8 @@ def main() -> int:
         print(f"no {src}. Run census/fetch.sh first", file=sys.stderr)
         return 2
 
-    data = collect(src, load_shas(args.census / "shas.tsv"))
+    shas = load_shas(args.census / "shas.tsv")
+    data = collect_typescript(src, shas) if args.typescript else collect(src, shas)
     pop, cen = data["population"], data["census"]
     examined, with_python, with_tools = pop["examined"], pop["with_python"], pop["with_tools"]
     total_tools, annotated_tools = cen["tools"], cen["annotated"]

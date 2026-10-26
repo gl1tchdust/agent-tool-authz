@@ -44,9 +44,19 @@ for nwo in "${repos[@]}"; do
   slug="${nwo//\//__}"
   out="$SRC/$slug"
 
-  if [ -f "$out/.sha" ]; then
+  if [ -f "$out/.sha" ] && [ "${REFETCH:-0}" != "1" ]; then
     printf '%s\t%s\n' "$nwo" "$(cat "$out/.sha")" >> "$SHAS.partial"
     ok=$((ok+1)); continue
+  fi
+
+  # REFETCH=1 re-downloads a repository already on disk, at the commit already
+  # recorded for it. Needed when the set of extracted extensions changes: the
+  # first census took *.py only, so adding TypeScript needs the tarball again
+  # but not another resolution of a commit we already know. Re-resolving would
+  # cost 2699 API calls and the rate-limit pause that goes with them.
+  cached_sha=""
+  if [ -f "$out/.sha" ]; then
+    cached_sha="$(cat "$out/.sha")"
   fi
 
   # Resolve the commit, distinguishing three outcomes that must never be
@@ -64,7 +74,11 @@ for nwo in "${repos[@]}"; do
   # because a miss silently inflates the denominator of every rate computed
   # from this corpus.
   sha=""; verdict="ERROR"
+  if [ -n "$cached_sha" ] && [ "$cached_sha" != "MISS" ] && [ "$cached_sha" != "ERROR" ]; then
+    sha="$cached_sha"; verdict="OK"
+  fi
   for attempt in 1 2 3 4 5; do
+    [ "$verdict" = "OK" ] && break
     resp=$(gh api "repos/$nwo/commits/HEAD" --jq '.sha' 2>&1)
     if [ -n "$resp" ] && [ "${resp:0:1}" != "{" ] && ! printf '%s' "$resp" | grep -qi 'message\|error'; then
       sha="$resp"; verdict="OK"; break
@@ -84,7 +98,9 @@ for nwo in "${repos[@]}"; do
 
   rm -rf "$out"; mkdir -p "$out"
   if curl -sL --max-time 120 "https://codeload.github.com/$nwo/tar.gz/$sha" \
-      | tar -xz -C "$out" --wildcards '*.py' 2>/dev/null; then
+      | tar -xz -C "$out" --wildcards \
+           --exclude='*/node_modules/*' --exclude='*/dist/*' --exclude='*/build/*' \
+           '*.py' '*.ts' '*.tsx' '*.mjs' '*.js' 2>/dev/null; then
     printf '%s' "$sha" > "$out/.sha"
     printf '%s\t%s\n' "$nwo" "$sha" >> "$SHAS.partial"
     ok=$((ok+1))

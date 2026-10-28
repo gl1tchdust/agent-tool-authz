@@ -291,6 +291,7 @@ def _listed_tools(call, bindings: dict, src: bytes, path: pathlib.Path) -> list[
 def _tools_in(root, src: bytes, path: pathlib.Path) -> list[TsTool]:
     bindings = _bindings(root, src)
     tools: list[TsTool] = []
+    listed: list[TsTool] = []
 
     for node in _walk(root):
         if node.type != "call_expression":
@@ -303,7 +304,7 @@ def _tools_in(root, src: bytes, path: pathlib.Path) -> list[TsTool]:
             continue
         method = _text(prop, src)
         if method == "setRequestHandler":
-            tools.extend(_listed_tools(node, bindings, src, path))
+            listed.extend(_listed_tools(node, bindings, src, path))
             continue
         if method not in REGISTER_METHODS:
             continue
@@ -328,6 +329,18 @@ def _tools_in(root, src: bytes, path: pathlib.Path) -> list[TsTool]:
             line=node.start_point[0] + 1,
             declared=declared,
         ))
+
+    # One manifest per name, for the reason the Python side carries the same
+    # rule: a file that sets up both a stdio and an HTTP transport installs a
+    # ListTools handler for each, both returning the same array, and counting
+    # the manifest twice would inflate the population. A registered tool wins
+    # over a listed one of the same name, being the more specific statement.
+    names = {tool.name for tool in tools}
+    for tool in listed:
+        if tool.name in names:
+            continue
+        names.add(tool.name)
+        tools.append(tool)
     return tools
 
 

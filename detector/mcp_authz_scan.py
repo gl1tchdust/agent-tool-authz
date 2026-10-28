@@ -301,11 +301,10 @@ def _is_tool_decorator(dec: ast.AST) -> ast.Call | None:
     annotates a dispatcher, every phantom landed in the unannotated column and
     pushed the measured annotation rate down.
 
-    The cost of excluding it is a real blind spot rather than a wrong answer:
-    a server built on the low-level API returns its tools as data from
-    `list_tools()`, so this scanner cannot see them at all and the repository
-    reports zero tools. That is the honest result for a static reader, and it
-    is recorded as a limitation rather than papered over.
+    Excluding it left those servers reporting zero tools, which was a blind
+    spot rather than a wrong answer. It is now closed from the other side:
+    `_tools_from_list_handler` reads the `@server.list_tools()` manifest,
+    where the tools are declared as data. The dispatcher is still not a tool.
     """
     call = dec if isinstance(dec, ast.Call) else None
     target = call.func if call else dec
@@ -554,6 +553,134 @@ def tool_name(call: ast.Call, func_name: str) -> str:
     return func_name
 
 
+def _is_list_tools_decorator(dec: ast.AST) -> bool:
+    """Match @server.list_tools(), the low-level manifest handler."""
+    target = dec.func if isinstance(dec, ast.Call) else dec
+    return isinstance(target, ast.Attribute) and target.attr == "list_tools"
+
+
+def _is_tool_construction(node: ast.AST) -> bool:
+    """`Tool(...)`, `types.Tool(...)`, `mcp.types.Tool(...)`.
+
+    The last name has to be exactly `Tool`, so `ToolAnnotations(...)` and
+    `ToolResult(...)` do not match.
+    """
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+    return name == "Tool"
+
+
+def _listed_tool_calls(value: ast.AST | None, constants: dict[str, ast.AST],
+                       functions: dict[str, ast.AST] | None = None,
+                       depth: int = 0) -> list[ast.Call]:
+    """`Tool(...)` constructions reachable from a `list_tools` return value.
+
+    Classifying all 85 `list_tools` handlers in the registry corpus by their
+    return shape gave:
+
+        57  a list literal of Tool(...) calls
+        11  a bare name bound to such a list
+         9  a call to a local helper that returns one
+         6  a list comprehension
+         1  a mixed list
+         1  an attribute
+
+    The first three are followed, which is 77 of 85. `return get_all_tools()`
+    is the third and is worth the hop: all six of its occurrences are in the
+    largest repository in the corpus, and they are annotated, so skipping
+    them would have biased the rate in the *opposite* direction from the
+    TypeScript gap. Spreads and `READ + WRITE` are followed too. Each hop is
+    bounded by MAX_CALL_DEPTH, which also stops a cyclic helper.
+
+    A comprehension is deliberately not followed. Its length exists only at
+    run time, so a static reader that guessed would be inventing tools. Those
+    return nothing and the server reports the tools it writes out literally,
+    which undercounts rather than overcounts.
+    """
+    functions = functions or {}
+    if value is None or depth > MAX_CALL_DEPTH:
+        return []
+    if _is_tool_construction(value):
+        return [value]
+    if isinstance(value, ast.Name):
+        return _listed_tool_calls(constants.get(value.id), constants,
+                                  functions, depth + 1)
+    if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
+        return (_listed_tool_calls(value.left, constants, functions, depth + 1)
+                + _listed_tool_calls(value.right, constants, functions, depth + 1))
+    if isinstance(value, (ast.List, ast.Tuple)):
+        out: list[ast.Call] = []
+        for element in value.elts:
+            node = element.value if isinstance(element, ast.Starred) else element
+            out.extend(_listed_tool_calls(node, constants, functions, depth + 1))
+        return out
+    # return get_all_tools()  ->  read what the helper returns
+    if isinstance(value, ast.Call):
+        target = value.func
+        name = (target.attr if isinstance(target, ast.Attribute)
+                else getattr(target, "id", ""))
+        helper = functions.get(name)
+        if helper is not None:
+            out = []
+            for statement in ast.walk(helper):
+                if isinstance(statement, ast.Return):
+                    out.extend(_listed_tool_calls(statement.value, constants,
+                                                  functions, depth + 1))
+            return out
+    return []
+
+
+def _tools_from_list_handler(node: ast.AST, path: pathlib.Path,
+                             resolver: ConstantResolver) -> list[ToolDef]:
+    """Tools a low-level server declares as data rather than as decorators.
+
+        @server.list_tools()
+        async def list_tools() -> list[types.Tool]:
+            return [types.Tool(name="read_file", annotations=READ_ONLY)]
+
+    This is the other half of the exclusion documented on
+    `_is_tool_decorator`. Skipping `@server.call_tool()` was right, because a
+    dispatcher is not a tool, but it left these servers reporting zero tools.
+    89 `list_tools` handlers sit in the registry corpus, and the measured
+    annotation rate was computed without them.
+
+    **No behaviour is attributed, so these tools never produce findings.**
+    The implementation lives in the `call_tool` dispatcher, usually behind a
+    chain of `if name == ...` branches, and deciding which branch belongs to
+    which tool is the kind of semantic inference that scored 0 of 4 on the
+    labelled sample. The declaration is read; the code is not. A tool counted
+    here therefore contributes to the annotation rate and to nothing else.
+
+    `parameters` stays empty for the same reason: the signature is a JSON
+    `inputSchema`, not a Python one, and the policy scaffold is honest listing
+    the tool with no parameters rather than guessing at them.
+
+    Duplicate names are dropped by the caller, not here, because the
+    duplication is usually across handlers rather than within one. See
+    `scan_file`.
+    """
+    out: list[ToolDef] = []
+    for statement in ast.walk(node):
+        if not isinstance(statement, ast.Return):
+            continue
+        for call in _listed_tool_calls(statement.value, resolver.constants,
+                                       resolver.functions):
+            out.append(ToolDef(
+                name=tool_name(call, "<unnamed>"),
+                function=getattr(node, "name", "list_tools"),
+                file=str(path),
+                line=call.lineno,
+                parameters=[],
+                identifier_parameters=[],
+                declared=extract_annotations(call, resolver.constants,
+                                             resolver.functions),
+                behaviour=Behaviour(),
+            ))
+    return out
+
+
 def scan_file(path: pathlib.Path) -> list[ToolDef]:
     try:
         source = path.read_text(encoding="utf-8")
@@ -568,8 +695,12 @@ def scan_file(path: pathlib.Path) -> list[ToolDef]:
     resolver.visit(tree)
 
     tools: list[ToolDef] = []
+    listed: list[ToolDef] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if any(_is_list_tools_decorator(d) for d in node.decorator_list):
+            listed.extend(_tools_from_list_handler(node, path, resolver))
             continue
         for dec in node.decorator_list:
             call = _is_tool_decorator(dec)
@@ -592,6 +723,21 @@ def scan_file(path: pathlib.Path) -> list[ToolDef]:
                 behaviour=observe(node, resolver.functions, resolver.imports),
             ))
             break
+
+    # One manifest per name. A server that offers both stdio and HTTP
+    # transports declares `@app.list_tools()` once per transport, each
+    # returning the same manifest, and the msteams server in the registry
+    # corpus did exactly that: 22 tools reported for 11 real ones. A
+    # branching return inside one handler duplicates the same way.
+    #
+    # A decorator-defined tool wins over a listed one of the same name,
+    # because it carries observed behaviour and the listed one carries none.
+    names = {tool.name for tool in tools}
+    for tool in listed:
+        if tool.name in names:
+            continue
+        names.add(tool.name)
+        tools.append(tool)
     return tools
 
 

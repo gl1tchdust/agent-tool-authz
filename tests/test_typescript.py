@@ -322,3 +322,29 @@ def test_the_handler_itself_is_never_a_tool(tmp_path):
         server.setRequestHandler(InitializeRequestSchema, async () => ({}));
     """)
     assert tools == []
+
+
+def test_two_transports_sharing_one_manifest_count_it_once(tmp_path):
+    """The TypeScript half of the msteams duplicate.
+
+    A file that wires up stdio and HTTP installs a ListTools handler per
+    transport, each returning the same array. Dedup is per file, not per
+    handler.
+    """
+    tools = _scan(tmp_path, """
+        const TOOLS = [{ name: "a" }, { name: "b" }];
+        stdio.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+        http.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+    """)
+    assert [t.name for t in tools] == ["a", "b"]
+
+
+def test_a_registered_tool_wins_over_the_same_name_in_a_manifest(tmp_path):
+    tools = _scan(tmp_path, """
+        server.registerTool("echo", { annotations: { readOnlyHint: true } }, h);
+        server.setRequestHandler(ListToolsRequestSchema, async () => ({
+          tools: [{ name: "echo" }],
+        }));
+    """)
+    assert len(tools) == 1
+    assert tools[0].declared == {"readOnlyHint": True}

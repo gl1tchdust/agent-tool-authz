@@ -428,3 +428,201 @@ def test_a_real_tool_decorator_is_still_matched(tmp_path):
     )
     tools = scan_file(src)
     assert [t.name for t in tools] == ["fetch"]
+
+
+# --- the low-level manifest, where tools are data ----------------------------
+
+
+def test_tools_declared_in_a_list_tools_handler_are_counted(tmp_path):
+    """The other half of the call_tool exclusion.
+
+    Skipping the dispatcher was right, but it left low-level servers
+    reporting zero tools. The manifest is where they are declared, and it is
+    as static as any decorator.
+    """
+    tools = scan('''
+        @server.list_tools()
+        async def list_tools() -> list[types.Tool]:
+            return [
+                types.Tool(
+                    name="read_file",
+                    inputSchema={},
+                    annotations=types.ToolAnnotations(readOnlyHint=True),
+                ),
+                types.Tool(name="write_file", inputSchema={}),
+            ]
+    ''', tmp_path)
+    assert [t.name for t in tools] == ["read_file", "write_file"]
+    assert tools[0].declared == {"readOnlyHint": True}
+    assert tools[1].declared == {}
+
+
+def test_a_listed_tool_has_no_behaviour_and_so_no_findings(tmp_path):
+    """The implementation is in the dispatcher, and is not attributed.
+
+    Guessing which branch of `call_tool` belongs to which name is exactly the
+    semantic inference that scored 0 of 4 on the labelled sample. Reading the
+    declaration without the code means the tool counts toward the annotation
+    rate and toward nothing else.
+    """
+    tools = scan('''
+        @server.list_tools()
+        async def list_tools():
+            return [Tool(name="wipe", inputSchema={})]
+
+        @server.call_tool()
+        async def call_tool(name: str, arguments: dict):
+            os.unlink(arguments["path"])
+    ''', tmp_path)
+    assert len(tools) == 1
+    assert tools[0].behaviour.writes == []
+    assert find_discrepancies(tools) == []
+
+
+def test_a_listed_tool_list_resolves_through_a_constant(tmp_path):
+    tools = scan('''
+        TOOLS = [Tool(name="ping", annotations={"readOnlyHint": True})]
+
+        @server.list_tools()
+        async def list_tools():
+            return TOOLS
+    ''', tmp_path)
+    assert len(tools) == 1
+    assert tools[0].name == "ping"
+    assert tools[0].declared == {"readOnlyHint": True}
+
+
+def test_starred_and_concatenated_tool_lists_are_flattened(tmp_path):
+    """Grouping the manifest by permission is the case worth counting."""
+    tools = scan('''
+        READ = [Tool(name="get", annotations={"readOnlyHint": True})]
+        WRITE = [Tool(name="put", annotations={"readOnlyHint": False})]
+
+        @server.list_tools()
+        async def list_tools():
+            return [*READ, *WRITE]
+    ''', tmp_path)
+    assert [t.name for t in tools] == ["get", "put"]
+
+    concatenated = scan('''
+        READ = [Tool(name="get")]
+        WRITE = [Tool(name="put")]
+
+        @server.list_tools()
+        async def list_tools():
+            return READ + WRITE
+    ''', tmp_path)
+    assert [t.name for t in concatenated] == ["get", "put"]
+
+
+def test_a_computed_manifest_is_not_invented(tmp_path):
+    """Built at run time, so unknown at rest. Undercount, never guess."""
+    tools = scan('''
+        @server.list_tools()
+        async def list_tools():
+            return [Tool(**spec) for spec in registry.values()]
+    ''', tmp_path)
+    assert tools == []
+
+
+def test_tool_annotations_is_not_mistaken_for_a_tool(tmp_path):
+    """Only a construction whose last name is exactly `Tool` counts."""
+    tools = scan('''
+        @server.list_tools()
+        async def list_tools():
+            return [ToolAnnotations(readOnlyHint=True), ToolResult(ok=True)]
+    ''', tmp_path)
+    assert tools == []
+
+
+def test_a_branching_manifest_counts_each_tool_once(tmp_path):
+    """Two returns sharing a tool would otherwise count it twice."""
+    tools = scan('''
+        @server.list_tools()
+        async def list_tools():
+            if admin:
+                return [Tool(name="read"), Tool(name="write")]
+            return [Tool(name="read")]
+    ''', tmp_path)
+    assert [t.name for t in tools] == ["read", "write"]
+
+
+def test_a_manifest_delegated_to_a_helper_is_followed(tmp_path):
+    """`return get_all_tools()`, six occurrences in the largest repo.
+
+    Those six are annotated, so skipping the hop would have biased the rate
+    upward here, the opposite direction from the TypeScript gap. The
+    direction of a miss is not something to assume.
+    """
+    tools = scan('''
+        def get_all_tools():
+            return [
+                Tool(name="list_teams", annotations={"readOnlyHint": True}),
+                Tool(name="send_message"),
+            ]
+
+        @server.list_tools()
+        async def list_tools():
+            return get_all_tools()
+    ''', tmp_path)
+    assert [t.name for t in tools] == ["list_teams", "send_message"]
+    assert tools[0].declared == {"readOnlyHint": True}
+
+
+def test_a_cyclic_helper_does_not_hang_the_scanner(tmp_path):
+    """The depth bound has to stop mutual recursion, not just deep nesting."""
+    tools = scan('''
+        def a():
+            return b()
+
+        def b():
+            return a()
+
+        @server.list_tools()
+        async def list_tools():
+            return a()
+    ''', tmp_path)
+    assert tools == []
+
+
+def test_two_transports_sharing_one_manifest_count_it_once(tmp_path):
+    """Regression: 22 tools reported for 11 real ones.
+
+    The msteams server in the registry corpus registers a list_tools handler
+    per transport, stdio and HTTP, each returning the same manifest. Dedup
+    has to be per file, not per handler.
+    """
+    tools = scan('''
+        def get_all_tools():
+            return [Tool(name="a"), Tool(name="b")]
+
+        def run_stdio():
+            @app.list_tools()
+            async def list_tools():
+                return get_all_tools()
+
+        def run_http():
+            @app.list_tools()
+            async def list_tools_http():
+                return get_all_tools()
+    ''', tmp_path)
+    assert [t.name for t in tools] == ["a", "b"]
+
+
+def test_a_decorated_tool_wins_over_the_same_name_in_a_manifest(tmp_path):
+    """The decorator carries observed behaviour; the manifest entry does not."""
+    tools = scan('''
+        import os
+
+        @mcp.tool()
+        def wipe(path: str):
+            os.unlink(path)
+
+        @server.list_tools()
+        async def list_tools():
+            return [Tool(name="wipe", annotations={"readOnlyHint": True})]
+    ''', tmp_path)
+    assert len(tools) == 1
+    # the decorator's observed behaviour survived, so the listed entry lost
+    assert tools[0].behaviour.writes == ["unlink"]
+    assert tools[0].declared == {}

@@ -236,6 +236,21 @@ BARE = textwrap.dedent('''
 ''')
 
 
+MANIFEST = textwrap.dedent('''
+    from mcp.server import Server
+    from mcp import types
+
+    server = Server("t")
+
+    @server.list_tools()
+    async def list_tools() -> list[types.Tool]:
+        return [
+            types.Tool(name="read_it", inputSchema={},
+                       annotations=types.ToolAnnotations(readOnlyHint=True)),
+            types.Tool(name="write_it", inputSchema={}),
+        ]
+''')
+
 def _tree(tmp_path: pathlib.Path, repos: dict[str, dict[str, str]]) -> pathlib.Path:
     src = tmp_path / "src"
     for slug, files in repos.items():
@@ -328,3 +343,18 @@ def test_load_shas_strips_whitespace_and_carriage_returns(tmp_path: pathlib.Path
     f = tmp_path / "shas.tsv"
     f.write_text(line + "\n", encoding="utf-8")
     assert load_shas(f) == {"own/a": "abc"}
+
+def test_census_counts_a_low_level_manifest_server(tmp_path: pathlib.Path) -> None:
+    """A repo whose tools are data, not decorators, used to count as zero.
+
+    This is the census-level half of the detector fix: the rate is computed
+    from scan_tree, so a repo that declares its tools in a list_tools handler
+    has to reach the population counts too, not just the detector's output.
+    """
+    src = _tree(tmp_path, {"own__lowlevel": {"server.py": MANIFEST}})
+    data = collect(src, {})
+    assert data["population"]["with_tools"] == 1
+    assert data["census"]["tools"] == 2
+    assert data["census"]["annotated"] == 1
+    # no behaviour is attributed to a listed tool, so it cannot contradict
+    assert data["findings"] == []

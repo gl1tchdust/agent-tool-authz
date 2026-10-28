@@ -225,14 +225,20 @@ anyone can re-derive is worth more than a 1.000 that was tuned into existence.
 
 Four codebases is not a population, so [`census/`](census/) runs the same
 detector over the whole official MCP registry: 28,028 records, 3,310
-repositories, **3,786 tools**.
+repositories, 2,703 resolved, **13,285 tools in two languages**.
 
-| | |
-|---|---|
-| Repositories examined | 2,699 |
-| With statically detectable tools | 209 |
-| Tools | 3,786 |
-| **Declaring any annotation** | **39.2%** |
+| | Python | TypeScript / JS |
+|---|---|---|
+| Repositories with tools | 211 | 659 |
+| Tools | 3,807 | 9,478 |
+| **Declaring any annotation, per tool** | **39.2%** | **32.1%** |
+| Declaring any annotation, per repository | 37.4% | 42.3% |
+
+Both rates are published per language because for TypeScript they disagree by
+ten points: large projects annotate less than small ones, so a single pooled
+figure would hide the clustering. Read 39.2% as an upper bound. The detector
+does not read Python's low-level `list_tools()` handlers, and closing that
+same gap on the TypeScript side cost 0.9 points.
 
 That rate is a census and needs no human judgement, only a parse. It also
 corrected the number this project first published: measured on SDK and FastMCP
@@ -272,8 +278,11 @@ contradictions. Of the four finding kinds, the structural one scored 10 of 10
 and the two interesting ones scored 0 of 4, so porting the comparison would
 have doubled the wrong answers along with the coverage.
 
-Not in the 39.2% yet either: `census/fetch.sh` extracts only `*.py`, so there
-is no TypeScript on disk to count. A data gap, not a capability gap.
+It now reads both shapes: `registerTool`-style calls and the low-level
+`ListToolsRequestSchema` handler that returns tool definitions as an array.
+Adding the second recovered 456 tools in 44 repositories that had reported
+none, and because those are only 13.8% annotated it moved the TypeScript rate
+down from 33.0% to 32.1%.
 
 ### What it refuses to claim
 

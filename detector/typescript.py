@@ -30,6 +30,16 @@ variable and reports the tool as undeclared, which is the same mistake the
 Python scanner made against the official git server before `ConstantResolver`
 existed. Module-level `const` bindings are resolved here for the same reason.
 
+The other shape is the low-level one, where tools are data rather than calls:
+
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: [{ name: "read_file", annotations: { readOnlyHint: true } }],
+    }));
+
+`_listed_tools` reads those. They are 248 call sites in the registry census,
+and because a hand-written array is the code least likely to annotate
+anything, omitting them pushed the measured rate up rather than down.
+
 Read only. Nothing is imported, installed, executed or connected to.
 """
 
@@ -42,12 +52,20 @@ import sys
 
 HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
 
-# Methods that register one tool. `setRequestHandler` is excluded for the same
-# reason `call_tool` is excluded on the Python side: it registers the dispatcher
-# for every tool a low-level server exposes, and those tools are returned as
-# data from a list handler, which a static reader cannot enumerate. A server
-# built that way honestly reports zero tools here.
+# Methods that register one tool each.
+#
+# `setRequestHandler` is not one of them, and never counts as a tool itself:
+# it installs a handler, the same way Python's `call_tool` installs the
+# dispatcher for every tool at once. But a `ListToolsRequestSchema` handler
+# *returns* the tool definitions, annotations included, and when that return
+# value is an array literal it is as readable at rest as any `registerTool`
+# call. `_listed_tools` reads those. See its docstring for what stays
+# unreadable and why that direction of error is the safe one.
 REGISTER_METHODS = frozenset({"registerTool", "tool", "addTool"})
+
+# The request schema whose handler returns the tool list. Matched by the
+# identifier as written, which is how every server in the corpus spells it.
+LIST_TOOLS_SCHEMA = "ListToolsRequestSchema"
 
 SKIP_DIRS = {".git", "node_modules", "dist", "build", "out", ".next", "coverage"}
 
@@ -148,16 +166,8 @@ def _bindings(root, src: bytes) -> dict:
     return out
 
 
-def _resolve(node, bindings: dict, depth: int = 0):
-    """Follow identifiers to the node they were bound to."""
-    if node is None or depth > MAX_RESOLVE_DEPTH:
-        return None
-    if node.type == "identifier":
-        return _resolve(bindings.get(_text(node, b"")), bindings, depth + 1)
-    return node
-
-
 def _resolve_named(node, bindings: dict, src: bytes, depth: int = 0):
+    """Follow identifiers to the node they were bound to."""
     if node is None or depth > MAX_RESOLVE_DEPTH:
         return None
     if node.type == "identifier":
@@ -198,6 +208,86 @@ def _annotations(obj, bindings: dict, src: bytes) -> dict[str, bool]:
     return out
 
 
+def _array_elements(node, bindings: dict, src: bytes, depth: int = 0) -> list:
+    """Elements of an array literal, flattening `...spread` of other arrays.
+
+    `tools: [...readTools, ...writeTools]` is how a server that groups its
+    tools by permission assembles the list, and those are exactly the servers
+    whose annotations are worth counting. Following the spread costs four
+    lines. Not following it would read the whole list as zero tools.
+    """
+    if node is None or node.type != "array" or depth > MAX_RESOLVE_DEPTH:
+        return []
+    out = []
+    for child in node.named_children:
+        if child.type == "spread_element":
+            inner = child.named_children[0] if child.named_children else None
+            out.extend(_array_elements(_resolve_named(inner, bindings, src),
+                                       bindings, src, depth + 1))
+        else:
+            out.append(child)
+    return out
+
+
+def _listed_tools(call, bindings: dict, src: bytes, path: pathlib.Path) -> list[TsTool]:
+    """Tool definitions returned by a ListTools handler, where enumerable.
+
+    A low-level server declares its tools as data rather than through calls:
+
+        server.setRequestHandler(ListToolsRequestSchema, async () => ({
+          tools: [{ name: "read_file", annotations: { readOnlyHint: true } }],
+        }));
+
+    Those declarations are as static as any `registerTool` argument, so
+    leaving them out was a measurement gap rather than a principled
+    exclusion. It mattered: 248 call sites in the registry census register
+    tools this way, and hand-written low-level arrays are the code *least*
+    likely to carry annotations, so omitting them biased the rate upward.
+
+    What stays unreadable is anything computed:
+
+        return { tools: Object.values(tools).map((t) => t.definition) };
+        const sanitized = availableTools.map(({ _meta, ...rest }) => rest);
+
+    The array is produced at run time and a static reader that guessed at its
+    length would be inventing data. Those resolve to nothing and the server
+    reports the tools it states literally, which undercounts rather than
+    overcounts. Same direction of error as every other miss in this module.
+
+    Only the first `tools:` pair inside the handler is read, because that is
+    the response field; a second one deeper in would be some other object's.
+    """
+    args = call.child_by_field_name("arguments")
+    if args is None:
+        return []
+    named = args.named_children
+    if not named or _text(named[0], src).strip() != LIST_TOOLS_SCHEMA:
+        return []
+
+    for node in _walk(call):
+        if node.type != "pair":
+            continue
+        key = node.child_by_field_name("key")
+        if key is None or _text(key, src).strip("\"'`") != "tools":
+            continue
+        array = _resolve_named(node.child_by_field_name("value"), bindings, src)
+        tools = []
+        for element in _array_elements(array, bindings, src):
+            obj = _resolve_named(element, bindings, src)
+            if obj is None or obj.type != "object":
+                continue
+            name = _resolve_named(_property(obj, "name", src), bindings, src)
+            tools.append(TsTool(
+                name=(_text(name, src).strip("\"'`")
+                      if name is not None and name.type == "string" else "<unnamed>"),
+                file=str(path),
+                line=obj.start_point[0] + 1,
+                declared=_annotations(obj, bindings, src),
+            ))
+        return tools
+    return []
+
+
 def _tools_in(root, src: bytes, path: pathlib.Path) -> list[TsTool]:
     bindings = _bindings(root, src)
     tools: list[TsTool] = []
@@ -209,7 +299,13 @@ def _tools_in(root, src: bytes, path: pathlib.Path) -> list[TsTool]:
         if fn is None or fn.type != "member_expression":
             continue
         prop = fn.child_by_field_name("property")
-        if prop is None or _text(prop, src) not in REGISTER_METHODS:
+        if prop is None:
+            continue
+        method = _text(prop, src)
+        if method == "setRequestHandler":
+            tools.extend(_listed_tools(node, bindings, src, path))
+            continue
+        if method not in REGISTER_METHODS:
             continue
         args = node.child_by_field_name("arguments")
         if args is None:

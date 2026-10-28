@@ -10,11 +10,14 @@ built for MCP do not check them either.
 I built something that does and measured it twice. Once against 289 tools in
 four reference codebases where every finding is hand-labelled, giving
 **precision 0.800, recall 0.667**. Then against the whole official MCP
-registry: 28,028 records, 3,310 repositories, **3,786 tools**.
+registry: 28,028 records, 3,310 repositories, **13,285 tools** across Python
+and TypeScript.
 
 The census overturned the claim this writeup originally made. I reported that
 8.7% of tools declare any annotation and argued that figure was "a ceiling,
-not a mean". It was a floor. The real rate is **39.2%**.
+not a mean". It was a floor. The real rate is **39.2% in Python and 32.1% in
+TypeScript**, and section 4 gives a second rate for each because for
+TypeScript the two disagree.
 
 Also checked in: the six bugs the two corpora found in my own detector, and a
 hand-labelled random sample showing that the detector's structural check is
@@ -186,12 +189,12 @@ The sweep ran to the genuine end: 282 pages, `ac.inference.sh/mcp` through
 |---|---|
 | Registry records | 28,028 |
 | Current active servers with a GitHub repository | 3,310 distinct repos |
-| Resolved | **2,699** |
-| Returned 404 | 611 |
+| Resolved | **2,703** |
+| Returned 404 | 607 |
 | Unresolved | **0** |
-| Containing Python | 704 |
-| With statically detectable MCP tools | 209 |
-| **Tools** | **3,786** |
+| Containing Python | 708 |
+| With statically detectable MCP tools | 211 |
+| **Tools** | **3,807** |
 
 Only `*.py` was fetched, from a tarball at a resolved commit SHA. Nothing was
 cloned, installed, imported or executed, and no server in the registry was
@@ -200,8 +203,8 @@ ever contacted.
 ### 39.2%, not 8.7%
 
 ```
-tool-level   1484 / 3786  = 0.392
-repo-level     78 /  209  = 0.373
+tool-level   1494 / 3807  = 0.392
+repo-level     79 /  211  = 0.374
 ```
 
 The earlier version of this writeup said:
@@ -222,13 +225,13 @@ most. 8.7% was a floor, and the real rate is four and a half times higher.
 
 Two checks before trusting 0.392, because a tool-level rate is precisely where
 clustering hides. The largest repository alone holds 220 tools and the top ten
-hold 35.9% of all of them, so one project's shared constant can move the
+hold 35.7% of all of them, so one project's shared constant can move the
 pooled figure. Computing the rate per repository, where each project counts
-once regardless of size, gives 0.373. The two agreeing within two points is
+once regardless of size, gives 0.374. The two agreeing within two points is
 what makes the number worth quoting.
 
-Adoption is also bimodal rather than gradual. Of 209 repositories with tools,
-**69 annotate every tool, 131 annotate none, and only 9 are partial.** It is a
+Adoption is also bimodal rather than gradual. Of 211 repositories with tools,
+**70 annotate every tool, 132 annotate none, and only 9 are partial.** It is a
 convention split: either the author knows annotations exist and applies them
 everywhere, usually through a shared constant, or has never encountered them.
 
@@ -240,6 +243,69 @@ thing being mismatched was mostly absent.
 That excuse is gone. **Nearly two in five tools carry declarations a client
 may gate auto-approval on.** Checking whether those declarations match the
 code matters four times more than the original corpus implied.
+
+### TypeScript: 32.1%, and why both rates are published
+
+The same census over the same 2,703 repositories, reading `*.ts`, `*.tsx`,
+`*.js` and `*.mjs` instead of `*.py`.
+
+| | Python | TypeScript / JavaScript |
+|---|---|---|
+| Repositories with tools | 211 | 659 |
+| Tools | 3,807 | 9,478 |
+| Declaring any annotation | 1,494 | 3,038 |
+| **Tool-level rate** | **0.392** | **0.321** |
+| **Repo-level rate** | **0.374** | **0.423** |
+
+Both rates are given for each language because for TypeScript they do not
+agree, and a single number would hide that. Python's two land two points
+apart, which is what made 0.392 safe to quote. TypeScript's land ten points
+apart, in the opposite direction: large projects annotate less than small
+ones, so counting per tool gives a lower figure than counting per project.
+The largest single repository holds 1,253 tools, and the top ten hold 31.0%
+of all of them.
+
+Adoption is also less tidy here. Python split cleanly into 70 repositories
+annotating everything and 132 annotating nothing, with 9 partial. TypeScript
+has 211 / 380 / **68** partial. The "either the author knows annotations
+exist or has never met them" convention split is a Python finding, not a
+property of the ecosystem.
+
+**What the gap in the reader was worth.** The first TypeScript run read only
+`registerTool`, `tool` and `addTool`, and reported 0.330. It ignored the
+low-level shape, where tools are data returned by a `ListToolsRequestSchema`
+handler rather than registered by a call:
+
+```ts
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [{ name: "read_file", annotations: { readOnlyHint: true } }],
+}));
+```
+
+That was 248 call sites. Reading the enumerable ones recovered **456 tools in
+44 repositories that had previously reported none**, and those 456 are **13.8%
+annotated against a 33% baseline**, which pulled the rate down to 0.321. The
+prediction was made before the re-run and in the right direction: a
+hand-written array is the code least likely to annotate anything, so omitting
+it had been biasing the rate upward.
+
+Arrays that are computed rather than written out stay uncounted:
+
+```ts
+return { tools: Object.values(registry).map((t) => t.definition) };
+```
+
+A static reader cannot enumerate that, and guessing its length would be
+inventing data. So 0.321 is still a slight overestimate, by the same
+mechanism and in the same direction.
+
+**The identical gap is still open on the Python side**, and it is larger.
+Python's low-level servers return their tools from a `list_tools()` handler,
+which this detector does not read: 89 such decorators and roughly 1,147
+`Tool(name=...)` constructions sit in the corpus uncounted, against 3,807
+counted. The TypeScript result is now direct evidence that closing it would
+move 0.392 downward rather than leave it alone. Until it is closed, read
+**0.392 as an upper bound** on Python adoption, not a point estimate.
 
 ### Findings
 
@@ -428,25 +494,27 @@ folded into the miss count quietly biases every rate taken from the corpus.
 
 ## 7. Limits
 
-- **The census is Python only; TypeScript reads declarations but is not
-  counted yet.** `detector/typescript.py` extracts annotations from TypeScript
-  and JavaScript with tree-sitter, and against the official TypeScript servers
-  finds 49 tools, all 49 annotated. It is not in the 39.2% because the corpus
-  fetch extracts only `*.py`, so there is no TypeScript on disk to count. That
-  is a data gap, not a capability gap, and closing it is a re-fetch.
-  A GitHub search for `mcp-server language:typescript` returned 48,619
-  repositories on 2026-10-22, which drifts daily and depends on the query, so
-  read it as an order of magnitude rather than a measurement.
+- **Both languages are counted, and their rates are not interchangeable.**
+  Python is 0.392 tool-level against 0.374 repo-level; TypeScript is 0.321
+  against 0.423. Quoting one rate for "MCP" would be wrong in both
+  directions. A GitHub search for `mcp-server language:typescript` returned
+  48,619 repositories on 2026-10-22, which drifts daily and depends on the
+  query, so read it as an order of magnitude rather than a measurement.
 - **Behaviour analysis is Python only.** The TypeScript reader does
   declarations and nothing else, so no contradiction is reported for a
   TypeScript server. That is deliberate: of the four finding kinds, the one
   that works scored 10 of 10 and the two interesting ones scored 0 of 4, so
   porting the comparison would have doubled the wrong answers along with the
   coverage.
-- **Decorator-defined tools only.** Servers built on the low-level `Server`
-  API return their tools as data from `list_tools()`, which a static reader
-  cannot enumerate. 92 files in the registry use that pattern and report zero
-  tools rather than wrong ones.
+- **Python reads decorator-defined tools only, and that biases 0.392
+  upward.** Servers built on the low-level `Server` API return their tools as
+  data from `list_tools()`. 89 such decorators and roughly 1,147
+  `Tool(name=...)` constructions sit uncounted in the corpus against 3,807
+  counted. The equivalent gap on the TypeScript side was closed and cost
+  0.9 points, because the recovered tools were 13.8% annotated against a 33%
+  baseline. Expect the same direction here, so **0.392 is an upper bound**.
+  TypeScript now reads the enumerable form of this shape; Python does not
+  yet.
 - **Severity is unreliable.** The HIGH and MEDIUM kinds were wrong in all four
   cases examined. Treat `undeclared-risk` as the trustworthy output and the
   rest as leads.
@@ -521,8 +589,12 @@ so rerun either after an interruption:
 ```bash
 ./census/harvest.sh                                   # pages the registry
 python census/select.py .census/pages .census/candidates.json
-./census/fetch.sh                                     # *.py at pinned SHAs
-python -m census.census --sample 12                   # rate, findings, sample
+./census/fetch.sh                                     # source at pinned SHAs
+python -m census.census --sample 12                   # python: rate, findings
+python -m census.census --typescript                  # typescript: rate
+
+# the typescript run needs tree-sitter
+pip install -r requirements-optional.txt
 ```
 
 Labels are in
@@ -532,7 +604,7 @@ one entry per finding with a verdict and the reasoning. If a label is wrong,
 those files are the thing to argue with.
 
 The registry moves. A census run on a later date will not reproduce 28,028
-records or 3,786 tools, which is why the figures here name the date and the
+records or 13,285 tools, which is why the figures here name the date and the
 pipeline is checked in.
 
 ---

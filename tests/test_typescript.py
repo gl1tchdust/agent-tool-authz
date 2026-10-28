@@ -241,3 +241,84 @@ def test_an_exported_const_is_still_a_module_binding(tmp_path):
     """)
     assert tools[0].name == "exported"
     assert tools[0].declared == {"openWorldHint": True}
+
+
+# ---------------------------------------------------------------------------
+# the low-level form, where tools are data returned by the list handler
+# ---------------------------------------------------------------------------
+
+def test_tools_listed_by_the_handler_are_counted(tmp_path):
+    """The shape a low-level server writes, annotations and all."""
+    tools = _scan(tmp_path, """
+        server.setRequestHandler(ListToolsRequestSchema, async () => ({
+          tools: [
+            { name: "read_file", inputSchema: {},
+              annotations: { readOnlyHint: true, openWorldHint: false } },
+            { name: "write_file", inputSchema: {} },
+          ],
+        }));
+    """)
+    assert [t.name for t in tools] == ["read_file", "write_file"]
+    assert tools[0].declared == {"readOnlyHint": True, "openWorldHint": False}
+    assert tools[1].declared == {}
+
+
+def test_a_listed_tool_array_resolves_through_a_const(tmp_path):
+    """`tools: TOOLS` where TOOLS is a module-level array."""
+    tools = _scan(tmp_path, """
+        const TOOLS = [{ name: "ping", annotations: { readOnlyHint: true } }];
+        server.setRequestHandler(ListToolsRequestSchema, async () => {
+          return { tools: TOOLS };
+        });
+    """)
+    assert len(tools) == 1
+    assert tools[0].name == "ping"
+    assert tools[0].declared == {"readOnlyHint": True}
+
+
+def test_spread_arrays_in_the_tool_list_are_flattened(tmp_path):
+    """Grouping tools by permission is exactly the case worth counting."""
+    tools = _scan(tmp_path, """
+        const READ = [{ name: "get", annotations: { readOnlyHint: true } }];
+        const WRITE = [{ name: "put", annotations: { readOnlyHint: false } }];
+        server.setRequestHandler(ListToolsRequestSchema, async () => ({
+          tools: [...READ, ...WRITE],
+        }));
+    """)
+    assert [t.name for t in tools] == ["get", "put"]
+    assert tools[1].declared == {"readOnlyHint": False}
+
+
+def test_a_computed_tool_list_is_not_invented(tmp_path):
+    """Produced at run time, so unknown at rest. Undercount, never guess."""
+    tools = _scan(tmp_path, """
+        server.setRequestHandler(ListToolsRequestSchema, async () => ({
+          tools: Object.values(registry).map((t) => t.definition),
+        }));
+    """)
+    assert tools == []
+
+
+def test_the_call_tool_handler_lists_nothing(tmp_path):
+    """Only the ListTools schema returns definitions.
+
+    `CallToolRequestSchema` handlers destructure `request.params` and often
+    mention a `tools` lookup table. Reading a `tools:` pair out of one would
+    count the dispatcher's routing table as declarations.
+    """
+    tools = _scan(tmp_path, """
+        server.setRequestHandler(CallToolRequestSchema, async (req) => {
+          const { tools } = ctx;
+          return handle({ tools: [{ name: "not-a-declaration" }] });
+        });
+    """)
+    assert tools == []
+
+
+def test_the_handler_itself_is_never_a_tool(tmp_path):
+    """An empty or absent list yields no tools, not one phantom per server."""
+    tools = _scan(tmp_path, """
+        server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }));
+        server.setRequestHandler(InitializeRequestSchema, async () => ({}));
+    """)
+    assert tools == []
